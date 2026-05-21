@@ -20,20 +20,17 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install PyQt6 paramiko pyinstaller
+        run: pip install PyQt6 paramiko pyinstaller
 
       - name: Build with PyInstaller
-        run: |
-          pyinstaller pwnagotchi_gui.spec
+        run: pyinstaller --windowed --name Pwnagotchi pwnagotchi_gui.py
 
-      - name: Find DMG or APP
+      - name: Package as DMG
         run: |
-          ls dist/
-          # If the spec produces a .app, package it as DMG
-          if [ -d "dist/Pwnagotchi.app" ]; then
-            hdiutil create -volname "Pwnagotchi" -srcfolder dist/Pwnagotchi.app -ov -format UDZO dist/Pwnagotchi.dmg
-          fi
+          hdiutil create -volname "Pwnagotchi" \
+            -srcfolder dist/Pwnagotchi.app \
+            -ov -format UDZO \
+            dist/Pwnagotchi.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -52,12 +49,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install PyQt6 paramiko pyinstaller
+        run: pip install PyQt6 paramiko pyinstaller
 
       - name: Build EXE
-        run: |
-          pyinstaller --onefile --windowed --name Pwnagotchi pwnagotchi_gui.py
+        run: pyinstaller --onefile --windowed --name Pwnagotchi pwnagotchi_gui.py
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -91,9 +86,6 @@ jobs:
             |----------|------|
             | macOS    | `Pwnagotchi.dmg` |
             | Windows  | `Pwnagotchi.exe` |
-
-            ## What's new
-            See [README](https://github.com/${{ github.repository }}#readme) for full usage instructions.
           files: |
             release/Pwnagotchi.dmg
             release/Pwnagotchi.exe
