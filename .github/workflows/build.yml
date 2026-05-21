@@ -1,0 +1,101 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install PyQt6 paramiko pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller pwnagotchi_gui.spec
+
+      - name: Find DMG or APP
+        run: |
+          ls dist/
+          # If the spec produces a .app, package it as DMG
+          if [ -d "dist/Pwnagotchi.app" ]; then
+            hdiutil create -volname "Pwnagotchi" -srcfolder dist/Pwnagotchi.app -ov -format UDZO dist/Pwnagotchi.dmg
+          fi
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pwnagotchi-macOS
+          path: dist/Pwnagotchi.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install PyQt6 paramiko pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller --onefile --windowed --name Pwnagotchi pwnagotchi_gui.py
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pwnagotchi-Windows
+          path: dist/Pwnagotchi.exe
+
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Pwnagotchi-macOS
+          path: release/
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Pwnagotchi-Windows
+          path: release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Pwnagotchi Manager ${{ github.ref_name }}"
+          body: |
+            ## 📥 Downloads
+            | Platform | File |
+            |----------|------|
+            | macOS    | `Pwnagotchi.dmg` |
+            | Windows  | `Pwnagotchi.exe` |
+
+            ## What's new
+            See [README](https://github.com/${{ github.repository }}#readme) for full usage instructions.
+          files: |
+            release/Pwnagotchi.dmg
+            release/Pwnagotchi.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
