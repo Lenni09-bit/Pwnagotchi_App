@@ -1,6 +1,6 @@
 """
 Pwnagotchi Handshake Manager & Hashcat Command Builder
-======================================================
+
 Requirements:
     pip install PyQt6 paramiko
 
@@ -26,9 +26,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QPalette, QClipboard
 
-# ──────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
-# ──────────────────────────────────────────────────────────────────────────────
 
 HANDSHAKE_REMOTE_PATH = "/home/pi/handshakes"
 DOWNLOAD_DIR = Path.home() / "Downloads" / "pwn"
@@ -274,13 +272,9 @@ QProgressBar::chunk {
 """
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # DATA MODELS
-# ──────────────────────────────────────────────────────────────────────────────
 
-# ──────────────────────────────────────────────────────────────────────────────
 # HANDSHAKE ANALYSIS
-# ──────────────────────────────────────────────────────────────────────────────
 
 class HandshakeQuality:
     GOOD    = "GOOD"
@@ -373,9 +367,7 @@ def _analyse_pcap(pcap_path: str) -> "tuple[str, int]":
         return HandshakeQuality.FAIL, 0
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # DATA MODELS  (extended)
-# ──────────────────────────────────────────────────────────────────────────────
 
 class HandshakeFile:
     """Represents a .pcap or .hc22000 file, either remote or local."""
@@ -405,7 +397,7 @@ class HandshakeFile:
             self.hs_analysed = True
             return
         ext = self.extension()
-        if ext == ".pcap":
+        if ext in (".pcap", ".pcapng"):
             quality, count = _analyse_pcap(self.path)
             self.hs_quality = quality
             self.eapol_count = count
@@ -435,10 +427,10 @@ class HandshakeFile:
 
     def quality_icon(self) -> str:
         return {
-            HandshakeQuality.GOOD:    "✅ GOOD",
-            HandshakeQuality.WEAK:    "⚠️ WEAK",
-            HandshakeQuality.FAIL:    "❌ FAIL",
-            HandshakeQuality.UNKNOWN: "⏳ —",
+            HandshakeQuality.GOOD:    "GOOD",
+            HandshakeQuality.WEAK:    "WEAK",
+            HandshakeQuality.FAIL:    "FAIL",
+            HandshakeQuality.UNKNOWN: "UNKNOWN",
         }.get(self.hs_quality, "—")
 
     def quality_color(self) -> str:
@@ -450,7 +442,7 @@ class HandshakeFile:
         }.get(self.hs_quality, "#8b949e")
 
     def list_label(self) -> str:
-        prefix = "🌐" if self.is_remote else "💾"
+        prefix = "[SSH]" if self.is_remote else "[LOCAL]"
         size   = self.size_str().rjust(9)
         status = self.quality_icon()
         return f"{prefix}  {self.filename:<40}  {size}   {status}"
@@ -465,10 +457,10 @@ class HandshakeFile:
             f"EAPOL/WPA:   {self.eapol_count if self.hs_analysed else 'not yet analysed'}",
         ]
         if self.hs_quality == HandshakeQuality.FAIL:
-            lines += ["", "⚠  This capture does not contain a valid WPA handshake.",
+            lines += ["", "Warning: this capture does not contain a valid WPA handshake.",
                       "   Try capturing again closer to the access point."]
         elif self.hs_quality == HandshakeQuality.WEAK:
-            lines += ["", "⚠  Incomplete handshake — hashcat may still crack it via PMKID."]
+            lines += ["", "Warning: incomplete handshake, hashcat may still crack it via PMKID."]
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -480,7 +472,7 @@ class HandshakeFile:
     def validate(self) -> "tuple[bool, str]":
         ext = self.extension()
         if self.is_remote:
-            if ext not in (".pcap", ".hc22000"):
+            if ext not in (".pcap", ".pcapng", ".hc22000"):
                 return False, f"Unknown extension: {ext}"
             return True, "OK"
         if not os.path.exists(self.path):
@@ -493,14 +485,12 @@ class HandshakeFile:
                     return False, ".hc22000 file does not start with 'WPA*'"
             except Exception as e:
                 return False, f"Cannot read file: {e}"
-        elif ext != ".pcap":
+        elif ext not in (".pcap", ".pcapng"):
             return False, f"Unsupported extension: {ext}"
         return True, "OK"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # SSH WORKER THREAD
-# ──────────────────────────────────────────────────────────────────────────────
 
 class SSHWorker(QThread):
     """Runs SSH operations in a background thread to avoid UI freezes."""
@@ -518,11 +508,19 @@ class SSHWorker(QThread):
         self._mode = "list"
         self._remote_path: str = ""
         self._local_path: str = ""
+        self._list_dir: str = HANDSHAKE_REMOTE_PATH
 
     def set_download(self, remote_path: str, local_path: str):
         self._mode = "download"
         self._remote_path = remote_path
         self._local_path = local_path
+
+    def set_list_dir(self, remote_dir: str):
+        """Configure which remote folder to scan for .pcap files (fixes the
+        old hardcoded-path bug where any handshakes outside
+        /home/pi/handshakes were invisible)."""
+        self._mode = "list"
+        self._list_dir = remote_dir.strip() or HANDSHAKE_REMOTE_PATH
 
     def _make_client(self):
         import paramiko
@@ -552,13 +550,25 @@ class SSHWorker(QThread):
 
     def _run_list(self):
         try:
+            import shlex
             client = self._make_client()
-            _, stdout, _ = client.exec_command(
-                f"stat -c '%n %s' {HANDSHAKE_REMOTE_PATH}/*.pcap 2>/dev/null",
-                timeout=15,
+            remote_dir = shlex.quote(self._list_dir.rstrip("/") or "/")
+            # Search the configured folder recursively (find handles pcap AND
+            # pcapng, and won't silently return nothing just because the
+            # handshakes live one directory deeper than expected).
+            cmd = (
+                f"find {remote_dir} -maxdepth 4 -type f "
+                f"\\( -iname '*.pcap' -o -iname '*.pcapng' \\) "
+                f"-exec stat -c '%n %s' {{}} \\; 2>/dev/null"
             )
+            _, stdout, stderr = client.exec_command(cmd, timeout=20)
             output = stdout.read().decode().strip()
+            err = stderr.read().decode().strip()
             client.close()
+
+            if not output and err:
+                self.error.emit(f"No files found in '{self._list_dir}' ({err})")
+                return
 
             file_info: list = []
             for line in output.splitlines():
@@ -592,9 +602,43 @@ class SSHWorker(QThread):
             self.download_error.emit(str(e))
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # REUSABLE UI HELPERS
-# ──────────────────────────────────────────────────────────────────────────────
+
+class ScriptRunWorker(QThread):
+    """Runs a generated shell script and streams its output back to the UI
+    so the whole convert-and-crack pipeline can happen with one click instead
+    of manually copy/pasting two commands per file."""
+
+    output_line = pyqtSignal(str)
+    finished_run = pyqtSignal(int)
+
+    def __init__(self, script_path: str):
+        super().__init__()
+        self.script_path = script_path
+        self._proc: "subprocess.Popen | None" = None
+
+    def run(self):
+        try:
+            self._proc = subprocess.Popen(
+                ["/bin/bash", self.script_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            assert self._proc.stdout is not None
+            for line in self._proc.stdout:
+                self.output_line.emit(line.rstrip("\n"))
+            self._proc.wait()
+            self.finished_run.emit(self._proc.returncode)
+        except Exception as e:
+            self.output_line.emit(f"[ERROR] {e}")
+            self.finished_run.emit(-1)
+
+    def stop(self):
+        if self._proc and self._proc.poll() is None:
+            self._proc.terminate()
+
 
 def make_label(text: str, bold: bool = False, size: int = 12) -> QLabel:
     lbl = QLabel(text)
@@ -625,9 +669,7 @@ def separator() -> QFrame:
     return line
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # SSH TAB
-# ──────────────────────────────────────────────────────────────────────────────
 
 class SSHTab(QWidget):
     files_loaded = pyqtSignal(list)   # list of HandshakeFile
@@ -644,7 +686,7 @@ class SSHTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        # ── Connection group ──────────────────────────────────────────────────
+        # Connection group
         conn_box, conn_layout = make_group("SSH Connection")
 
         row1 = QHBoxLayout()
@@ -668,13 +710,25 @@ class SSHTab(QWidget):
         row3.addWidget(self.pass_input)
         conn_layout.addLayout(row3)
 
-        self.connect_btn = make_button("🔗  Connect & Load Files", "primary")
+        row4 = QHBoxLayout()
+        row4.addWidget(make_label("Handshake Folder:"))
+        self.remote_dir_input = QLineEdit(HANDSHAKE_REMOTE_PATH)
+        self.remote_dir_input.setPlaceholderText("/home/pi/handshakes")
+        self.remote_dir_input.setToolTip(
+            "Folder on the Pwnagotchi to scan (searched recursively, 4 levels "
+            "deep). Change this if your handshakes live somewhere other than "
+            "the default — e.g. /home/pi/loot or a custom plugin path."
+        )
+        row4.addWidget(self.remote_dir_input)
+        conn_layout.addLayout(row4)
+
+        self.connect_btn = make_button("Connect & Load Files", "primary")
         self.connect_btn.clicked.connect(self._connect)
         conn_layout.addWidget(self.connect_btn)
 
         layout.addWidget(conn_box)
 
-        # ── File list ─────────────────────────────────────────────────────────
+        # File list
         files_box, files_layout = make_group("Remote Handshake Files")
 
         self.file_list = QListWidget()
@@ -682,7 +736,7 @@ class SSHTab(QWidget):
         self.file_list.setMinimumHeight(180)
         files_layout.addWidget(self.file_list)
 
-        self.download_btn = make_button("⬇  Download Selected", "success")
+        self.download_btn = make_button("Download Selected", "success")
         self.download_btn.setEnabled(False)
         self.download_btn.clicked.connect(self._download_selected)
         files_layout.addWidget(self.download_btn)
@@ -715,20 +769,23 @@ class SSHTab(QWidget):
             return
 
         self.connect_btn.setEnabled(False)
-        self.connect_btn.setText("⏳  Connecting...")
+        self.connect_btn.setText("Connecting...")
         self.file_list.clear()
         self._loaded_files = []
         self.download_btn.setEnabled(False)
         self.status_update.emit(f"Connecting to {host}...", "info")
 
+        remote_dir = self.remote_dir_input.text().strip() or HANDSHAKE_REMOTE_PATH
+
         self._ssh_worker = SSHWorker(host, user, password)
+        self._ssh_worker.set_list_dir(remote_dir)
         self._ssh_worker.connected.connect(self._on_connected)
         self._ssh_worker.error.connect(self._on_error)
         self._ssh_worker.start()
 
     def _on_connected(self, file_info: list):
         self.connect_btn.setEnabled(True)
-        self.connect_btn.setText("🔗  Connect & Load Files")
+        self.connect_btn.setText("Connect & Load Files")
 
         if not file_info:
             self.status_update.emit("Connected — no .pcap files found.", "warn")
@@ -756,7 +813,7 @@ class SSHTab(QWidget):
 
     def _on_error(self, msg: str):
         self.connect_btn.setEnabled(True)
-        self.connect_btn.setText("🔗  Connect & Load Files")
+        self.connect_btn.setText("Connect & Load Files")
         self.status_update.emit(f"SSH error: {msg}", "err")
 
     def _download_selected(self):
@@ -787,7 +844,7 @@ class SSHTab(QWidget):
         if not self._pending_downloads:
             self.download_btn.setEnabled(True)
             total = self._dl_success + self._dl_fail
-            msg = f"Downloaded {self._dl_success}/{total} file(s) → {DOWNLOAD_DIR}"
+            msg = f"Downloaded {self._dl_success}/{total} file(s) to {DOWNLOAD_DIR}"
             level = "ok" if self._dl_fail == 0 else "warn"
             self.status_update.emit(msg, level)
             return
@@ -826,9 +883,7 @@ class SSHTab(QWidget):
         ]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # LOCAL FILES TAB
-# ──────────────────────────────────────────────────────────────────────────────
 
 class LocalTab(QWidget):
     files_loaded = pyqtSignal(list)
@@ -846,11 +901,21 @@ class LocalTab(QWidget):
         files_box, files_layout = make_group("Local Handshake Files")
 
         btn_row = QHBoxLayout()
-        self.select_btn = make_button("📂  Select .pcap / .hc22000 Files", "primary")
+        self.select_btn = make_button("Select Files", "primary")
+        self.select_btn.setToolTip("Pick individual .pcap / .hc22000 files")
         self.select_btn.clicked.connect(self._select_files)
         btn_row.addWidget(self.select_btn)
 
-        self.analyse_btn = make_button("🔍  Analyse Selected")
+        self.select_folder_btn = make_button("Scan Folder", "primary")
+        self.select_folder_btn.setToolTip(
+            "Point at a folder — every .pcap/.pcapng/.hc22000 file inside "
+            "(including subfolders) will be analysed automatically. Pick "
+            "which ones to crunch afterwards with the checkboxes/selection."
+        )
+        self.select_folder_btn.clicked.connect(self._select_folder)
+        btn_row.addWidget(self.select_folder_btn)
+
+        self.analyse_btn = make_button("Analyse Selected")
         self.analyse_btn.setEnabled(False)
         self.analyse_btn.setToolTip("Run EAPOL handshake analysis on selected files")
         self.analyse_btn.clicked.connect(self._analyse_selected)
@@ -862,9 +927,19 @@ class LocalTab(QWidget):
         self.file_list.setMinimumHeight(160)
         files_layout.addWidget(self.file_list)
 
-        clear_btn = make_button("🗑  Clear List")
+        list_btn_row = QHBoxLayout()
+        select_all_btn = make_button("Select All")
+        select_all_btn.clicked.connect(self.file_list.selectAll)
+        list_btn_row.addWidget(select_all_btn)
+
+        select_none_btn = make_button("Select None")
+        select_none_btn.clicked.connect(self.file_list.clearSelection)
+        list_btn_row.addWidget(select_none_btn)
+
+        clear_btn = make_button("Clear List")
         clear_btn.clicked.connect(self._clear)
-        files_layout.addWidget(clear_btn)
+        list_btn_row.addWidget(clear_btn)
+        files_layout.addLayout(list_btn_row)
 
         layout.addWidget(files_box)
 
@@ -889,11 +964,41 @@ class LocalTab(QWidget):
             self,
             "Select Handshake Files",
             str(Path.home()),
-            "Handshake Files (*.pcap *.hc22000);;All Files (*)",
+            "Handshake Files (*.pcap *.pcapng *.hc22000);;All Files (*)",
         )
         if not paths:
             return
+        self._add_paths(paths)
 
+    def _select_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Folder to Scan for Handshakes", str(Path.home())
+        )
+        if not folder:
+            return
+
+        exts = {".pcap", ".pcapng", ".hc22000"}
+        existing = {Path(hf.path).resolve() for hf in self._loaded_files}
+        found: list[str] = []
+        for root, _dirs, filenames in os.walk(folder):
+            for fname in filenames:
+                if Path(fname).suffix.lower() in exts:
+                    full = Path(root) / fname
+                    if full.resolve() not in existing:
+                        found.append(str(full))
+
+        if not found:
+            self.status_update.emit(
+                f"No .pcap/.pcapng/.hc22000 files found under {folder}.", "warn"
+            )
+            return
+
+        self.status_update.emit(
+            f"Scanning {len(found)} file(s) in {folder} …", "info"
+        )
+        self._add_paths(sorted(found))
+
+    def _add_paths(self, paths: list[str]) -> None:
         added = 0
         for p in paths:
             hf = HandshakeFile(p, is_remote=False)
@@ -913,7 +1018,11 @@ class LocalTab(QWidget):
         if added:
             self.analyse_btn.setEnabled(True)
             self.files_loaded.emit(self._loaded_files)
-            self.status_update.emit(f"Added {added} file(s).", "ok")
+            self.status_update.emit(
+                f"Added {added} file(s) — select the ones you want to crunch, "
+                f"then set your wordlist(s) and Build Command.",
+                "ok",
+            )
 
     def _clear(self):
         self.file_list.clear()
@@ -950,14 +1059,12 @@ class LocalTab(QWidget):
         ]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # ATTACK CONFIG PANEL
-# ──────────────────────────────────────────────────────────────────────────────
 
 class AttackConfigPanel(QWidget):
     def __init__(self):
         super().__init__()
-        self._wordlist_path: str = ""
+        self._wordlist_paths: list[str] = []
         self._build_ui()
 
     def _build_ui(self):
@@ -967,24 +1074,45 @@ class AttackConfigPanel(QWidget):
 
         self.attack_tabs = QTabWidget()
 
-        # ── Wordlist Tab ──────────────────────────────────────────────────────
+        # Wordlist Tab
         wl_widget = QWidget()
         wl_layout = QVBoxLayout(wl_widget)
         wl_layout.setSpacing(10)
 
-        wl_btn = make_button("📄  Select Wordlist (.txt)")
-        wl_btn.clicked.connect(self._select_wordlist)
-        wl_layout.addWidget(wl_btn)
+        wl_btn_row = QHBoxLayout()
+        wl_add_btn = make_button("Add Wordlist(s)", "primary")
+        wl_add_btn.setToolTip(
+            "Select one or more wordlists — they'll be tried in order against "
+            "every selected handshake."
+        )
+        wl_add_btn.clicked.connect(self._add_wordlists)
+        wl_btn_row.addWidget(wl_add_btn)
 
-        self.wl_path_label = QLabel("No wordlist selected")
+        wl_remove_btn = make_button("Remove Selected")
+        wl_remove_btn.clicked.connect(self._remove_wordlists)
+        wl_btn_row.addWidget(wl_remove_btn)
+        wl_layout.addLayout(wl_btn_row)
+
+        self.wl_list = QListWidget()
+        self.wl_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.wl_list.setMinimumHeight(90)
+        self.wl_list.setToolTip(
+            "Queue of wordlists. Each selected handshake will be run against "
+            "each wordlist in this order (hashcat's potfile automatically "
+            "skips a hash once it's already been cracked, so later wordlists "
+            "won't re-run work that already succeeded)."
+        )
+        wl_layout.addWidget(self.wl_list)
+
+        self.wl_path_label = QLabel("No wordlists selected")
         self.wl_path_label.setStyleSheet("color: #8b949e; font-size: 11px; padding: 4px;")
         self.wl_path_label.setWordWrap(True)
         wl_layout.addWidget(self.wl_path_label)
         wl_layout.addStretch()
 
-        self.attack_tabs.addTab(wl_widget, "📋  Wordlist")
+        self.attack_tabs.addTab(wl_widget, "Wordlist")
 
-        # ── Bruteforce Tab ────────────────────────────────────────────────────
+        # Bruteforce Tab
         bf_widget = QWidget()
         bf_layout = QVBoxLayout(bf_widget)
         bf_layout.setSpacing(10)
@@ -1017,19 +1145,43 @@ class AttackConfigPanel(QWidget):
         bf_layout.addWidget(len_box)
         bf_layout.addStretch()
 
-        self.attack_tabs.addTab(bf_widget, "🔢  Bruteforce")
+        self.attack_tabs.addTab(bf_widget, "Bruteforce")
 
         layout.addWidget(self.attack_tabs)
         self._update_mask_preview()
 
-    def _select_wordlist(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select Wordlist", str(Path.home()), "Text Files (*.txt);;All Files (*)"
+    def _add_wordlists(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select Wordlist(s)", str(Path.home()),
+            "Text Files (*.txt);;All Files (*)"
         )
-        if path:
-            self._wordlist_path = path
-            short = path if len(path) < 55 else "…" + path[-52:]
-            self.wl_path_label.setText(short)
+        if not paths:
+            return
+        added = 0
+        for path in paths:
+            if path not in self._wordlist_paths:
+                self._wordlist_paths.append(path)
+                self.wl_list.addItem(QListWidgetItem(path))
+                added += 1
+        self._refresh_wl_label()
+
+    def _remove_wordlists(self):
+        for item in self.wl_list.selectedItems():
+            path = item.text()
+            if path in self._wordlist_paths:
+                self._wordlist_paths.remove(path)
+            self.wl_list.takeItem(self.wl_list.row(item))
+        self._refresh_wl_label()
+
+    def _refresh_wl_label(self):
+        n = len(self._wordlist_paths)
+        if n == 0:
+            self.wl_path_label.setText("No wordlists selected")
+            self.wl_path_label.setStyleSheet("color: #8b949e; font-size: 11px; padding: 4px;")
+        else:
+            self.wl_path_label.setText(
+                f"{n} wordlist(s) queued — tried in order per handshake."
+            )
             self.wl_path_label.setStyleSheet("color: #3fb950; font-size: 11px; padding: 4px;")
 
     # Charset sizes for keyspace calculation
@@ -1049,13 +1201,13 @@ class AttackConfigPanel(QWidget):
         if overflow:
             self.mask_preview.setText(
                 f"Mask: {mask}\n"
-                f"⚠ Integer overflow! Reduce length (max ~13 for mixed sets)."
+                f"Warning: integer overflow. Reduce length (max ~13 for mixed sets)."
             )
             self.mask_preview.setStyleSheet("color: #f85149; font-size: 12px; padding: 4px;")
         elif keyspace > 10**15:
             self.mask_preview.setText(
                 f"Mask: {mask}\n"
-                f"⚠ Keyspace ~{keyspace:.2e} — will take very long."
+                f"Warning: keyspace ~{keyspace:.2e} - this will take a very long time."
             )
             self.mask_preview.setStyleSheet("color: #d29922; font-size: 12px; padding: 4px;")
         else:
@@ -1092,8 +1244,8 @@ class AttackConfigPanel(QWidget):
     def get_mode(self) -> str:
         return "wordlist" if self.attack_tabs.currentIndex() == 0 else "bruteforce"
 
-    def get_wordlist(self) -> str:
-        return self._wordlist_path
+    def get_wordlists(self) -> list[str]:
+        return list(self._wordlist_paths)
 
     def get_mask(self) -> tuple[str, bool]:
         """Returns (mask, overflow). Caller must check overflow before use."""
@@ -1102,9 +1254,7 @@ class AttackConfigPanel(QWidget):
         return mask, overflow
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # HASHCAT COMMAND BUILDER PANEL
-# ──────────────────────────────────────────────────────────────────────────────
 
 class CommandBuilderPanel(QWidget):
     status_update = pyqtSignal(str, str)
@@ -1134,11 +1284,11 @@ class CommandBuilderPanel(QWidget):
 
         cmd_layout.addWidget(separator())
 
-        self.build_btn = make_button("⚡  BUILD COMMAND", "primary")
+        self.build_btn = make_button("BUILD COMMAND", "primary")
         self.build_btn.setMinimumHeight(40)
         cmd_layout.addWidget(self.build_btn)
 
-        # ── Step 1: Convert ───────────────────────────────────────────────────
+        # Step 1: Convert
         self.convert_label = QLabel("Step 1 — Convert .pcap  (skip if already .hc22000)")
         self.convert_label.setStyleSheet(
             "color: #d29922; font-size: 11px; font-weight: bold; padding-top: 6px;"
@@ -1147,7 +1297,7 @@ class CommandBuilderPanel(QWidget):
 
         self.convert_edit = QTextEdit()
         self.convert_edit.setReadOnly(True)
-        self.convert_edit.setPlaceholderText("→ hcxpcapngtool command will appear here…")
+        self.convert_edit.setPlaceholderText("hcxpcapngtool command will appear here...")
         self.convert_edit.setMaximumHeight(58)
         self.convert_edit.setStyleSheet(
             "QTextEdit { background: #1a1400; color: #d29922; border: 1px solid #554400;"
@@ -1155,14 +1305,14 @@ class CommandBuilderPanel(QWidget):
         )
         cmd_layout.addWidget(self.convert_edit)
 
-        self.copy_convert_btn = make_button("📋  Copy Convert Command")
+        self.copy_convert_btn = make_button("Copy Convert Command")
         self.copy_convert_btn.setEnabled(False)
         self.copy_convert_btn.clicked.connect(self._copy_convert)
         cmd_layout.addWidget(self.copy_convert_btn)
 
         cmd_layout.addWidget(separator())
 
-        # ── Step 2: Hashcat ───────────────────────────────────────────────────
+        # Step 2: Hashcat
         self.hashcat_label = QLabel("Step 2 — Run hashcat")
         self.hashcat_label.setStyleSheet(
             "color: #3fb950; font-size: 11px; font-weight: bold; padding-top: 4px;"
@@ -1171,14 +1321,50 @@ class CommandBuilderPanel(QWidget):
 
         self.output_edit = QTextEdit()
         self.output_edit.setReadOnly(True)
-        self.output_edit.setPlaceholderText("→ hashcat command will appear here…")
+        self.output_edit.setPlaceholderText("hashcat command will appear here...")
         self.output_edit.setMaximumHeight(58)
         cmd_layout.addWidget(self.output_edit)
 
-        self.copy_btn = make_button("📋  Copy hashcat Command", "success")
+        self.copy_btn = make_button("Copy hashcat Command", "success")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self._copy_hashcat)
         cmd_layout.addWidget(self.copy_btn)
+
+        cmd_layout.addWidget(separator())
+
+        # Step 3: Auto convert-and-go
+        auto_label = QLabel("Step 3 — or just let it run")
+        auto_label.setStyleSheet(
+            "color: #58a6ff; font-size: 11px; font-weight: bold; padding-top: 4px;"
+        )
+        cmd_layout.addWidget(auto_label)
+
+        run_row = QHBoxLayout()
+        self.run_btn = make_button("Save & Run Script", "primary")
+        self.run_btn.setEnabled(False)
+        self.run_btn.setToolTip(
+            "Writes both steps into one script and runs it here: converts "
+            "any .pcap that isn't already .hc22000, then crunches every "
+            "selected handshake against every queued wordlist in order."
+        )
+        self.run_btn.clicked.connect(self._save_and_run)
+        run_row.addWidget(self.run_btn)
+
+        self.stop_btn = make_button("Stop", "danger")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._stop_run)
+        run_row.addWidget(self.stop_btn)
+        cmd_layout.addLayout(run_row)
+
+        self.console = QTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setPlaceholderText("Live hcxpcapngtool / hashcat output will appear here...")
+        self.console.setMinimumHeight(140)
+        self.console.setStyleSheet(
+            "QTextEdit { background: #010409; color: #c9d1d9; border: 1px solid #30363d;"
+            " border-radius: 4px; font-family: 'Courier New'; font-size: 11px; padding: 6px; }"
+        )
+        cmd_layout.addWidget(self.console)
 
         layout.addWidget(cmd_box)
 
@@ -1193,7 +1379,7 @@ class CommandBuilderPanel(QWidget):
         has_convert = bool(convert_cmd)
         self.convert_edit.setPlainText(convert_cmd if has_convert else "")
         self.convert_edit.setPlaceholderText(
-            "→ not needed — file is already .hc22000" if not has_convert
+            "not needed - file is already .hc22000" if not has_convert
             else ""
         )
         self.copy_convert_btn.setEnabled(has_convert)
@@ -1204,6 +1390,7 @@ class CommandBuilderPanel(QWidget):
 
         self.output_edit.setPlainText(hashcat_cmd)
         self.copy_btn.setEnabled(bool(hashcat_cmd))
+        self.run_btn.setEnabled(bool(hashcat_cmd))
 
     # Backwards-compat shim
     def set_command(self, cmd: str):
@@ -1224,10 +1411,68 @@ class CommandBuilderPanel(QWidget):
     def get_workload(self) -> str:
         return WORKLOAD_MAP.get(self.workload_combo.currentText(), "-w 2")
 
+    def _build_script_text(self) -> str:
+        lines = ["#!/bin/bash", "set -uo pipefail", ""]
+        if self._convert_command:
+            lines.append("echo '=== Step 1: Converting .pcap files ==='")
+            lines.append(self._convert_command)
+            lines.append("")
+        lines.append("echo '=== Step 2: Cracking ==='")
+        lines.append(self._hashcat_command)
+        lines.append("")
+        return "\n".join(lines)
 
-# ──────────────────────────────────────────────────────────────────────────────
+    def _save_and_run(self):
+        if not self._hashcat_command:
+            self.status_update.emit("Build a command plan first.", "warn")
+            return
+
+        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        script_path = DOWNLOAD_DIR / "run_attack.sh"
+        try:
+            script_path.write_text(self._build_script_text())
+            os.chmod(script_path, 0o755)
+        except Exception as e:
+            self.status_update.emit(f"Could not write script: {e}", "err")
+            return
+
+        self.console.clear()
+        self.console.append(f"$ bash {script_path}\n")
+        self.run_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.status_update.emit(f"Running {script_path} — watch the console below.", "info")
+
+        self._worker = ScriptRunWorker(str(script_path))
+        self._worker.output_line.connect(self._on_output_line)
+        self._worker.finished_run.connect(self._on_run_finished)
+        self._worker.start()
+
+    def _on_output_line(self, line: str):
+        self.console.append(line)
+
+    def _on_run_finished(self, returncode: int):
+        self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        if returncode == 0:
+            self.status_update.emit(
+                "Script finished. Check the console for any cracked passwords.", "ok"
+            )
+        else:
+            self.status_update.emit(
+                f"Script exited with code {returncode} — hashcat returns "
+                f"non-zero if a wordlist runs out without a match, so check "
+                f"the console before assuming something's wrong.", "warn"
+            )
+
+    def _stop_run(self):
+        if hasattr(self, "_worker") and self._worker.isRunning():
+            self._worker.stop()
+            self.console.append("\n[stopped by user]")
+        self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+
+
 # MAIN WINDOW
-# ──────────────────────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -1254,7 +1499,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        # ── LEFT: Source (SSH / Local) ────────────────────────────────────────
+        # LEFT: Source (SSH / Local)
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -1267,8 +1512,8 @@ class MainWindow(QMainWindow):
         self.source_tabs = QTabWidget()
         self.ssh_tab = SSHTab()
         self.local_tab = LocalTab()
-        self.source_tabs.addTab(self.ssh_tab, "🌐  Pwnagotchi (SSH)")
-        self.source_tabs.addTab(self.local_tab, "💾  Local Files")
+        self.source_tabs.addTab(self.ssh_tab, "Pwnagotchi (SSH)")
+        self.source_tabs.addTab(self.local_tab, "Local Files")
 
         self.ssh_tab.status_update.connect(self._set_status)
         self.local_tab.status_update.connect(self._set_status)
@@ -1276,7 +1521,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.source_tabs)
         splitter.addWidget(left_widget)
 
-        # ── RIGHT: Attack config + Command builder ────────────────────────────
+        # RIGHT: Attack config + Command builder
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -1310,18 +1555,18 @@ class MainWindow(QMainWindow):
         self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
 
-    # ── Status helper ──────────────────────────────────────────────────────────
+    # Status helper
 
     def _set_status(self, msg: str, level: str = "info"):
-        icons = {"ok": "✅", "err": "❌", "warn": "⚠️", "info": "ℹ️"}
+        icons = {"ok": "[OK]", "err": "[ERROR]", "warn": "[WARN]", "info": "[INFO]"}
         obj_names = {"ok": "status_ok", "err": "status_err", "warn": "status_warn", "info": "status_info"}
-        self.status_label.setText(f"{icons.get(level, 'ℹ️')}  {msg}")
+        self.status_label.setText(f"{icons.get(level, '[INFO]')} {msg}")
         self.status_label.setObjectName(obj_names.get(level, "status_info"))
         # Force style refresh
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
 
-    # ── Active file selection ──────────────────────────────────────────────────
+    # Active file selection
 
     def _get_active_files(self) -> list[HandshakeFile]:
         idx = self.source_tabs.currentIndex()
@@ -1330,7 +1575,7 @@ class MainWindow(QMainWindow):
         else:
             return self.local_tab.get_selected_files()
 
-    # ── Build hashcat command ──────────────────────────────────────────────────
+    # Build hashcat command
 
     def _resolve_hash_file(self, hf: "HandshakeFile") -> tuple[str, str | None]:
         """
@@ -1351,11 +1596,13 @@ class MainWindow(QMainWindow):
         if hf.extension() == ".hc22000":
             return str(base_path), None
 
-        # It's a .pcap — build conversion command + expected output path
+        # It's a .pcap — build conversion command + expected output path.
+        # Guarded with a [ -f ... ] check so re-running the generated script
+        # (e.g. after adding more wordlists) doesn't reconvert every time.
         hc_path = base_path.with_suffix(".hc22000")
         convert_cmd = (
-            f"hcxpcapngtool -o {shlex.quote(str(hc_path))} "
-            f"{shlex.quote(str(base_path))}"
+            f"[ -f {shlex.quote(str(hc_path))} ] || hcxpcapngtool "
+            f"-o {shlex.quote(str(hc_path))} {shlex.quote(str(base_path))}"
         )
         return str(hc_path), convert_cmd
 
@@ -1372,7 +1619,27 @@ class MainWindow(QMainWindow):
 
         blocks: list[str] = []
         needs_conversion: list[str] = []
+        seen_convert: set[str] = set()
         remote_warning = False
+
+        if mode == "wordlist":
+            wordlists = self.attack_panel.get_wordlists()
+            if not wordlists:
+                self._set_status("Add at least one wordlist first.", "warn")
+                return
+            wl_resolved_list = [
+                str(Path(wl).expanduser().resolve()) for wl in wordlists
+            ]
+        else:
+            mask, overflow = self.attack_panel.get_mask()
+            if not mask:
+                self._set_status("Select at least one character set for bruteforce.", "warn")
+                return
+            if overflow:
+                self._set_status(
+                    "Mask keyspace overflows uint64 — reduce password length!", "err"
+                )
+                return
 
         for hf in files:
             if hf.is_remote:
@@ -1380,58 +1647,53 @@ class MainWindow(QMainWindow):
 
             hc_path, convert_cmd = self._resolve_hash_file(hf)
 
-            if convert_cmd:
+            if convert_cmd and convert_cmd not in seen_convert:
                 needs_conversion.append(convert_cmd)
+                seen_convert.add(convert_cmd)
 
-            # Build the hashcat command
             if mode == "wordlist":
-                wordlist = self.attack_panel.get_wordlist()
-                if not wordlist:
-                    self._set_status("Select a wordlist file first.", "warn")
-                    return
-                wl_resolved = str(Path(wordlist).expanduser().resolve())
-                cmd = (
-                    f"hashcat -m 22000 -a 0 {workload} "
-                    f"{shlex.quote(hc_path)} {shlex.quote(wl_resolved)}"
-                )
-            else:  # bruteforce
-                mask, overflow = self.attack_panel.get_mask()
-                if not mask:
-                    self._set_status("Select at least one character set for bruteforce.", "warn")
-                    return
-                if overflow:
-                    self._set_status(
-                        "Mask keyspace overflows uint64 — reduce password length!", "err"
+                blocks.append(f"echo '--- Cracking {hf.filename} ---'")
+                for wl_resolved in wl_resolved_list:
+                    blocks.append(
+                        f"hashcat -m 22000 -a 0 {workload} "
+                        f"{shlex.quote(hc_path)} {shlex.quote(wl_resolved)}"
                     )
-                    return
+            else:  # bruteforce
                 # shlex.quote wraps mask in single quotes -> zsh-safe (?d?l etc.)
-                cmd = (
+                blocks.append(
                     f"hashcat -m 22000 -a 3 {workload} "
                     f"{shlex.quote(hc_path)} {shlex.quote(mask)}"
                 )
-            blocks.append(cmd)
 
-        # Two separate commands
+        # Two command blocks — conversion (deduped) and cracking (multi-file,
+        # multi-wordlist, in order). hashcat's potfile means a hash already
+        # cracked by an earlier wordlist is skipped almost instantly by later
+        # wordlists, so it's safe to just run through the whole queue.
         convert_output = "\n".join(needs_conversion)
         hashcat_output = "\n".join(blocks)
 
         self.cmd_panel.set_commands(convert_output, hashcat_output)
 
+        n_files = len(files)
+        n_wl = len(wl_resolved_list) if mode == "wordlist" else 1
         if remote_warning:
             self._set_status(
                 "Remote file(s) — paths assume ~/Downloads/pwn/. Download first!", "warn"
             )
         elif needs_conversion:
             self._set_status(
-                "Copy & run Step 1 first (convert), then copy & run Step 2 (hashcat).", "warn"
+                f"Built plan for {n_files} file(s) × {n_wl} wordlist(s). "
+                f"Use Save & Run to auto-convert and crunch, or copy the "
+                f"commands manually.", "warn"
             )
         else:
-            self._set_status("Command built — copy and run in terminal!", "ok")
+            self._set_status(
+                f"Built plan for {n_files} file(s) × {n_wl} wordlist(s) — "
+                f"ready to run.", "ok"
+            )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
-# ──────────────────────────────────────────────────────────────────────────────
 
 def main():
     # Check PyQt6

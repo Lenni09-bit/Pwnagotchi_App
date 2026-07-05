@@ -1,107 +1,98 @@
-# 🐾 Pwnagotchi Manager
+Pwnagotchi Manager
 
-A macOS & Windows desktop app to manage your [Pwnagotchi](https://pwnagotchi.ai/) handshake captures and build [Hashcat](https://hashcat.net/) cracking commands — no terminal required.
+Pwnagotchi Manager is a simple desktop application for macOS and Windows that helps you manage handshake captures from your Pwnagotchi. It also makes it easier to create Hashcat commands without having to remember long terminal commands.
 
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+Features
 
----
+- Connect to your Pwnagotchi over SSH
+- Configurable remote handshake folder (searched recursively) instead of a hardcoded path
+- Browse and download captured .pcap files
+- Point at a local folder and it will scan and analyse every .pcap/.pcapng/.hc22000 file inside, including subfolders
+- Check whether a handshake is usable
+- Open local .pcap and .hc22000 files
+- Queue multiple wordlists and run them in order against multiple handshakes in one pass
+- Generate Hashcat commands for wordlist or bruteforce attacks
+- Generate the hcxpcapngtool command when a .pcap file needs to be converted
+- One-click "Save & Run Script" that converts and cracks automatically, with live output
+- Simple dark interface built with PyQt6
 
-## ✨ Features
+Download
 
-- **SSH connection** — connect directly to your Pwnagotchi and browse captured `.pcap` files
-- **Download handshakes** — pull files from the device to your Mac/PC with one click
-- **Handshake analysis** — detects EAPOL frames and rates captures as GOOD / WEAK / FAIL
-- **Local file support** — open `.pcap` or `.hc22000` files already on your machine
-- **Hashcat command builder** — generates ready-to-run wordlist or bruteforce commands
-- **Conversion helper** — auto-generates the `hcxpcapngtool` command when a `.pcap` needs converting
-- **Dark UI** — GitHub-style dark theme built with PyQt6
+Download the latest version from the Releases page.
 
----
+Supported platforms:
 
-## 📥 Download
+- macOS (Pwnagotchi.dmg)
+- Windows (Pwnagotchi.exe)
 
-Go to the [**Releases**](../../releases/latest) page and download:
+Python is not required. Everything is included in the download.
 
-| Platform | File |
-|----------|------|
-| macOS    | `Pwnagotchi.dmg` |
-| Windows  | `Pwnagotchi.exe` |
+Run from source
 
-No Python installation required — everything is bundled.
+Requirements:
 
----
+- Python 3.10 or newer
+- PyQt6
+- paramiko
 
-## 🛠 Run from source
+Install the required packages:
 
-**Requirements**
-```
-Python 3.10+
+bash
 pip install PyQt6 paramiko
-```
 
-**Run**
-```bash
+
+Clone the repository and start the program:
+
+bash
 git clone https://github.com/Lenni09-bit/Pwnagotchi_App.git
 cd Pwnagotchi_App
-pip install PyQt6 paramiko
 python pwnagotchi_gui.py
-```
 
----
 
-## 🔧 Build it yourself
+Build
 
-**macOS (DMG)**
-```bash
+macOS:
+
+bash
 pip install pyinstaller
 pyinstaller pwnagotchi_gui.spec
-```
 
-**Windows (EXE)**
-```bash
+
+Windows:
+
+bash
 pip install pyinstaller
 pyinstaller --onefile --windowed --name Pwnagotchi pwnagotchi_gui.py
-```
 
----
 
-## 📖 How to use
+How to use
 
-1. Connect your Pwnagotchi to the same Wi-Fi as your computer (or via USB ethernet)
-2. Open the app → **Pwnagotchi (SSH)** tab
-3. Enter the IP address (usually `10.0.0.2` for USB, or check your router)
-4. Username: `pi` · Password: `raspberry` (default)
-5. Click **Connect & Load Files**
-6. Select files → **Download Selected**
-7. Switch to **Attack Config**, choose wordlist or bruteforce
-8. Click **Build Command** → copy and run in terminal
+- Connect your Pwnagotchi to your computer using USB Ethernet or the same Wi-Fi network.
+- Open the app and go to the Pwnagotchi (SSH) tab.
+- Enter the IP address of your Pwnagotchi.
+- Log in with your username and password (default: pi / raspberry).
+- If your handshakes are not in the default /home/pi/handshakes folder, change the "Handshake Folder" field before connecting.
+- Click Connect & Load Files.
+- Select the handshake files you want to download.
+- Alternatively, open the Local Files tab and click Scan Folder to point at any local folder; every .pcap/.pcapng/.hc22000 file inside will be analysed automatically, then pick which ones to use.
+- Open the Attack Config tab.
+- Add one or more wordlists (they will be tried in order for each selected handshake), or switch to Bruteforce.
+- Click Build Command to see the generated commands, or click Save & Run Script to have the app convert and crack automatically and show live output.
 
----
+Optional tools
+These programs are optional but add extra features:
 
-## 🧰 External tools (optional)
+- hcxpcapngtool – Convert .pcap files to .hc22000
+- tshark – Analyze EAPOL frames
+- hashcat – Test passwords against captured handshakes
 
-The app works best with these installed:
+On macOS you can install them with:
 
-| Tool | Purpose |
-|------|---------|
-| [hcxpcapngtool](https://github.com/ZerBea/hcxtools) | Convert `.pcap` → `.hc22000` |
-| [tshark](https://www.wireshark.org/docs/man-pages/tshark.html) | Analyse EAPOL frames |
-| [hashcat](https://hashcat.net/hashcat/) | Crack the handshake |
+brew install hcxtools wireshark hashcat
 
-On macOS: `brew install hcxtools wireshark hashcat`
+Legal notice
+This project is intended for educational purposes and authorized security testing only.
+Only use it on networks that you own or have permission to test.
 
----
-
-## ⚠️ Legal notice
-
-This tool is intended for **authorized security testing and educational purposes only**.  
-Only use it on networks you own or have explicit written permission to test.  
-Unauthorized access to networks is illegal in most jurisdictions.
-
----
-
-## 📄 License
-
-MIT — see [LICENSE](LICENSE)
+License
+This project is licensed under the MIT License. See the LICENSE file for more information.
